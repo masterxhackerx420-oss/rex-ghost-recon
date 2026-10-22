@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rex's Ghost Recon</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #070a09; color: #e7f3ec; font-family: ui-sans-serif, system-ui, sans-serif; }
+  header, main { max-width: 920px; margin: 0 auto; padding: 16px; }
+  img { width: 100%; display: block; border: 1px solid #24312b; border-radius: 8px; }
+  h1 { font-size: 1.7rem; margin: 12px 0 4px; }
+  p, .note { color: #8ea399; }
+  a { color: #3ddc97; }
+  form, article { border: 1px solid #24312b; background: #101614; border-radius: 8px; padding: 16px; margin-top: 12px; }
+  label.mod { display: flex; gap: 8px; align-items: flex-start; min-height: 44px; }
+  .mods { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 12px; }
+  @media (max-width: 640px) { .mods { grid-template-columns: 1fr; } }
+  input[type=text] { width: 100%; box-sizing: border-box; height: 44px; background: #070a09; color: #e7f3ec; border: 1px solid #24312b; border-radius: 4px; padding: 0 12px; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+  button { height: 44px; background: #3ddc97; color: #070a09; border: 0; border-radius: 4px; padding: 0 16px; font-weight: 700; }
+  .ok { color: #3ddc97; }
+  .miss { color: #d3122f; }
+  dt { color: #8ea399; font-size: 12px; margin-top: 8px; }
+  dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<header>
+  <img src="https://raw.githubusercontent.com/masterxhackerx420-oss/rex-ghost-recon/main/header.jpg" alt="A masked figure in a black suit and red tie stands with an armored wolf in the rain.">
+  <h1>Rex's Ghost Recon</h1>
+  <p>Live public-record desk. Authorized hosts only. No exploit pack. Not affiliated with Ubisoft.</p>
+  <p class="note">Page body, hop lists, and port checks stay on the <a href="https://github.com/masterxhackerx420-oss/rex-ghost-recon/releases/tag/v1.0.0">installed copy</a>. This page does not probe ports.</p>
+</header>
+<main>
+  <form id="desk">
+    <input id="target" type="text" value="example.com" autocomplete="off" spellcheck="false" aria-label="Host">
+    <div class="mods" id="mods"></div>
+    <div class="row">
+      <label><input id="ok" type="checkbox"> I am allowed to look up this host.</label>
+    </div>
+    <button type="submit">Run recon</button>
+  </form>
+  <div id="out"></div>
+</main>
+<script>
+const MODULES = [
+  ["dns", "DNS", "Address, mail, name servers, TXT"],
+  ["registration", "Registration", "Public whois dates and registrar"],
+  ["headers", "Headers", "What the public homepage returns"],
+  ["framing", "Frame policy", "Clickjacking headers on the homepage"],
+  ["robots", "robots.txt", "The site's own public crawl file"],
+  ["links", "Links", "Links published on the homepage"],
+  ["location", "Network home", "Public geo and owner of the address"],
+  ["stack", "Stack hint", "Signatures sitting in the public HTML"],
+  ["certificate", "Certificate", "TLS issuer, names, and expiry"],
+  ["transparency", "Cert log", "Names published in certificate logs"],
+  ["reachability", "Reachability", "Short port list, installed copy only"],
+  ["redirects", "Redirects", "The public hop chain to the page"]
+];
+const mods = document.getElementById("mods");
+for (const [id, title, blurb] of MODULES) {
+  const label = document.createElement("label");
+  label.className = "mod";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.value = id;
+  box.checked = id !== "reachability";
+  const text = document.createElement("span");
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  text.append(strong, document.createTextNode(" — " + blurb));
+  label.append(box, text);
+  mods.append(label);
+}
+
+function cleanHost(raw) {
+  let value = String(raw || "").trim().toLowerCase();
+  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  value = value.split("/")[0].split("?")[0].split("#")[0];
+  value = value.replace(/:\d+$/, "");
+  if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
+  return value;
+}
+function isIp(host) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return host.split(".").every((part) => Number(part) <= 255);
+  }
+  return host.includes(":");
+}
+function blocked(host) {
+  if (!host || host.length > 253) return "Enter a public host name.";
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "metadata.google.internal") return "That name is not a public host.";
+  if (isIp(host)) {
+    if (host.includes(":")) return "Paste a public domain, or an IPv4 address.";
+    const [a, b] = host.split(".").map(Number);
+    if (a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224) return "Private and local addresses stay off this desk.";
+    return "";
+  }
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(host)) return "Enter a public host name, like example.com.";
+  return "";
+}
+async function doh(name, type) {
+  const url = new URL("https://cloudflare-dns.com/dns-query");
+  url.searchParams.set("name", name);
+  url.searchParams.set("type", type);
+  const response = await fetch(url, { headers: { accept: "application/dns-json" } });
+  if (!response.ok) return [];
+  const body = await response.json();
+  return (body.Answer || []).map((item) => item.data).filter(Boolean);
+}
+function result(title, ok, summary, rows) {
+  return { title, ok, summary, rows: rows.slice(0, 24) };
+}
+async function readHeaders(host) {
+  const response = await fetch("https://api.hackertarget.com/httpheaders/?q=" + encodeURIComponent("https://" + host));
+  const text = await response.text();
+  if (!response.ok || /^error/i.test(text.trim())) throw new Error(text.trim().slice(0, 180) || "Header lookup failed.");
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const status = lines[0] || "";
+  const headers = {};
+  for (const line of lines.slice(1)) {
+    const cut = line.indexOf(":");
+    if (cut < 1) continue;
+    headers[line.slice(0, cut).trim().toLowerCase()] = line.slice(cut + 1).trim();
+  }
+  return { status, headers };
+}
+async function runOne(id, host) {
+  if (id === "dns") {
+    if (isIp(host)) {
+      const parts = host.split(".").reverse().join(".") + ".in-addr.arpa";
+      const names = await doh(parts, "PTR");
+      return result("DNS", names.length > 0, names.length ? "Reverse names for that address." : "No public reverse name.", names.map((name) => ({ label: "PTR", value: name })));
+    }
+    const pairs = await Promise.all(["A", "AAAA", "CNAME", "MX", "NS", "TXT"].map(async (type) => [type, await doh(host, type).catch(() => [])]));
+    const rows = pairs.flatMap(([type, values]) => values.slice(0, 8).map((value) => ({ label: type, value })));
+    return result("DNS", rows.length > 0, rows.length ? rows.length + " public records." : "No public DNS records came back.", rows);
+  }
+  if (id === "registration") {
+    const response = await fetch("https://networkcalc.com/api/dns/whois/" + encodeURIComponent(host));
+    const body = await response.json();
+    const whois = body.whois || {};
+    const labels = [
+      ["registrar", "Registrar"],
+      ["registry_created_date", "Created"],
+      ["registry_expiration_date", "Expires"],
+      ["domain_status", "Status"],
+      ["abuse_email", "Abuse email"]
+    ];
+    const rows = labels.filter(([key]) => whois[key]).map(([key, label]) => ({ label, value: String(whois[key]) }));
+    return result("Registration", rows.length > 0, rows.length ? "Public registration record." : "The registry answered without useful fields.", rows);
+  }
+  if (id === "headers" || id === "framing" || id === "redirects" || id === "stack") {
+    const page = await readHeaders(host);
+    if (id === "headers") {
+      const rows = [{ label: "Status", value: page.status }];
+      for (const [key, value] of Object.entries(page.headers)) {
+        if (key === "set-cookie" || key === "cookie") {
+          rows.push({ label: key, value: "Present. Value hidden." });
+        } else {
+          rows.push({ label: key, value: value.slice(0, 280) });
+        }
+        if (rows.length >= 18) break;
+      }
+      return result("Headers", true, page.status || "Public response headers.", rows);
+    }
+    if (id === "framing") {
+      const xfo = page.headers["x-frame-options"] || "";
+      const csp = page.headers["content-security-policy"] || "";
+      const ancestors = (csp.match(/frame-ancestors[^;]*/i) || [""])[0];
+      const locked = /deny|sameorigin/i.test(xfo) || /frame-ancestors/i.test(csp);
+      return result("Frame policy", true, locked ? "Homepage tells browsers not to frame it freely." : "Homepage does not publish a frame restriction.", [
+        { label: "X-Frame-Options", value: xfo || "Not set" },
+        { label: "frame-ancestors", value: ancestors || "Not set" }
+      ]);
+    }
+    if (id === "redirects") {
+      return result("Redirects", true, "The public header dump shows the answer this lookup received. Full hop lists are on the installed copy.", [
+        { label: "Answer", value: page.status || "No status line." }
+      ]);
+    }
+    const server = page.headers.server || "";
+    const powered = page.headers["x-powered-by"] || "";
+    const hits = [];
+    if (/cloudflare/i.test(server)) hits.push("Cloudflare");
+    const rows = hits.map((name) => ({ label: "Signature", value: name }));
+    if (server) rows.push({ label: "Server", value: server });
+    if (powered) rows.push({ label: "X-Powered-By", value: powered });
+    return result("Stack hint", true, hits.length || server ? "Public header hints. Homepage HTML is on the installed copy." : "No familiar signature in the public headers.", rows);
+  }
+  if (id === "robots" || id === "links") {
+    return result(id === "robots" ? "robots.txt" : "Links", false, "A browser page cannot read another site's file. The installed copy reads the public page on your machine.", []);
+  }
+  if (id === "location") {
+    let ip = host;
+    if (!isIp(host)) {
+      const addresses = await doh(host, "A");
+      ip = addresses[0] || "";
+    }
+    if (!ip) return result("Network home", false, "No public address to place.", []);
+    const response = await fetch("https://ipwho.is/" + encodeURIComponent(ip));
+    const body = await response.json();
+    if (!body.success) return result("Network home", false, "No public network record for that address.", []);
+    const rows = [
+      { label: "Address", value: body.ip || ip },
+      { label: "Place", value: [body.city, body.region, body.country].filter(Boolean).join(", ") || "Unknown" },
+      { label: "Network", value: (body.connection && (body.connection.org || body.connection.isp)) || "Unknown" },
+      { label: "ASN", value: body.connection && body.connection.asn ? "AS" + body.connection.asn : "Unknown" }
+    ];
+    return result("Network home", true, "Public network home for the address. Not a street address.", rows);
+  }
+  if (id === "certificate") {
+    const response = await fetch("https://networkcalc.com/api/security/certificate/" + encodeURIComponent(host));
+    const body = await response.json();
+    const cert = body.certificate || {};
+    if (!cert.issued_to) return result("Certificate", false, "No certificate came back for that name.", []);
+    const end = cert.valid_to ? new Date(cert.valid_to) : null;
+    const days = end && !Number.isNaN(end.getTime()) ? Math.ceil((end.getTime() - Date.now()) / 86400000) : null;
+    const rows = [
+      { label: "Subject", value: cert.issued_to },
+      { label: "Issuer", value: cert.issued_by || "Unknown" },
+      { label: "Valid from", value: (cert.valid_from || "").slice(0, 10) },
+      { label: "Valid to", value: (cert.valid_to || "").slice(0, 10) }
+    ];
+    if (days !== null) rows.push({ label: "Days left", value: String(days) });
+    if (Array.isArray(cert.alternate_names) && cert.alternate_names.length) rows.push({ label: "Names", value: cert.alternate_names.slice(0, 8).join(", ") });
+    return result("Certificate", days === null || days >= 0, days !== null && days < 14 ? "Certificate expires in " + days + " days." : "Certificate presented for this name.", rows);
+  }
+  if (id === "transparency") {
+    if (isIp(host)) return result("Cert log", false, "Certificate logs are queried by domain name.", []);
+    const response = await fetch("https://crt.sh/?q=" + encodeURIComponent(host) + "&output=json");
+    const text = await response.text();
+    let list = [];
+    try { list = JSON.parse(text); } catch { return result("Cert log", false, "The certificate log returned something that was not a list.", []); }
+    const seen = new Set();
+    const rows = [];
+    for (const row of list) {
+      const name = String(row.name_value || "").split("\n")[0].trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      rows.push({ label: String(row.not_after || "").slice(0, 10) || "Logged", value: name.slice(0, 180) });
+      if (rows.length >= 18) break;
+    }
+    return result("Cert log", rows.length > 0, rows.length ? seen.size + " names seen in the public log sample." : "No logged names for that domain.", rows);
+  }
+  return result("Reachability", false, "This public desk does not probe ports. The installed copy checks a short list on your machine.", []);
+}
+
+function paint(report) {
+  const out = document.getElementById("out");
+  out.textContent = "";
+  for (const item of report) {
+    const article = document.createElement("article");
+    const title = document.createElement("h2");
+    title.textContent = item.title + " ";
+    const mark = document.createElement("span");
+    mark.className = item.ok ? "ok" : "miss";
+    mark.textContent = item.ok ? "RECORD" : "MISS";
+    title.append(mark);
+    const summary = document.createElement("p");
+    summary.textContent = item.summary;
+    article.append(title, summary);
+    const list = document.createElement("dl");
+    for (const line of item.rows) {
+      const dt = document.createElement("dt");
+      dt.textContent = line.label;
+      const dd = document.createElement("dd");
+      dd.textContent = line.value;
+      list.append(dt, dd);
+    }
+    article.append(list);
+    out.append(article);
+  }
+}
+
+document.getElementById("desk").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const host = cleanHost(document.getElementById("target").value);
+  const reason = blocked(host);
+  const out = document.getElementById("out");
+  if (reason) { out.textContent = reason; return; }
+  if (!document.getElementById("ok").checked) { out.textContent = "Confirm you are allowed to look up this host."; return; }
+  const picked = [...document.querySelectorAll("#mods input:checked")].map((box) => box.value);
+  if (!picked.length) { out.textContent = "Pick at least one module."; return; }
+  out.textContent = "Pulling public records…";
+  const report = [];
+  for (const id of picked) {
+    try {
+      report.push(await runOne(id, host));
+    } catch (error) {
+      const title = (MODULES.find((item) => item[0] === id) || [id, id])[1];
+      report.push(result(title, false, error instanceof Error ? error.message : "That lookup failed.", []));
+    }
+    paint(report);
+  }
+});
+</script>
+</body>
+</html>

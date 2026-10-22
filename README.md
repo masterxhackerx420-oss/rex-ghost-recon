@@ -4,6 +4,8 @@
 
 Public-record desk from WolfSec. Not affiliated with Ubisoft. No exploit pack, no password guessing, no vulnerability scripts.
 
+**[Open the live desk](https://masterxhackerx420-oss.github.io/rex-ghost-recon/)** — the browser desk with every module: DNS, registration, headers, frame policy, robots.txt, links, network home, stack hint, certificate, cert log, reachability, and redirects. Authorized hosts only. Reading another site's page, and any port check, still runs on the installed copy.
+
 Use it only on hosts you are allowed to inspect. Python 3.9 or newer. Nothing to pip install.
 
 ## Install
