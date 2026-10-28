@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://hits.sh/github.com/masterxhackerx420-oss/rex-ghost-recon/">
+    <img src="https://hits.sh/github.com/masterxhackerx420-oss/rex-ghost-recon.svg?style=for-the-badge&label=Visitors&color=8b5cf6&logo=eye" alt="Visitors" />
+  </a>
+</p>
+
 # Rex's Ghost Recon
 
 ![A masked figure in a black suit and red tie stands with an armored wolf in the rain.](header.jpg)
